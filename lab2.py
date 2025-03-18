@@ -1,85 +1,98 @@
+from typing import List, Dict
 from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from flask_restful import Api, Resource
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
-db = SQLAlchemy(app)
-api = Api(app)
 
+class Enrollment:
+    def __init__(self, id: int, student_id: int, course_id: int):
+        self.id = id
+        self.student_id = student_id
+        self.course_id = course_id
 
-# Models
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    posts = db.relationship('Post', backref='user', lazy=True)
+    def to_dict(self):
+        return {"id": self.id, "student_id": self.student_id, "course_id": self.course_id}
 
+class Course:
+    def __init__(self, id: int, name: str):
+        self.id = id
+        self.name = name
+        self.enrollments: List[Enrollment] = []
 
-class Post(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(200), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    comments = db.relationship('Comment', backref='post', lazy=True)
+    def add_enrollment(self, enrollment: Enrollment):
+        self.enrollments.append(enrollment)
 
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "enrollments": [enrollment.to_dict() for enrollment in self.enrollments]
+        }
 
-class Comment(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    text = db.Column(db.String(300), nullable=False)
-    post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+class Student:
+    def __init__(self, id: int, name: str):
+        self.id = id
+        self.name = name
+        self.enrollments: List[Enrollment] = []
 
+    def add_enrollment(self, enrollment: Enrollment):
+        self.enrollments.append(enrollment)
 
-# API Resources
-class UserResource(Resource):
-    def get(self):
-        users = User.query.all()
-        return jsonify([{'id': u.id, 'name': u.name} for u in users])
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "enrollments": [enrollment.to_dict() for enrollment in self.enrollments]
+        }
 
-    def post(self):
-        data = request.get_json()
-        new_user = User(name=data['name'])
-        db.session.add(new_user)
-        db.session.commit()
-        return jsonify({'message': 'User created'})
+class InMemoryAPI:
+    def __init__(self):
+        self.students: Dict[int, Student] = {}
+        self.courses: Dict[int, Course] = {}
+        self.enrollments: Dict[int, Enrollment] = {}
 
+    def create_student(self, id: int, name: str):
+        if id in self.students:
+            return {"error": "Student already exists"}
+        student = Student(id, name)
+        self.students[id] = student
+        return student.to_dict()
 
-class PostResource(Resource):
-    def get(self):
-        page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 5, type=int)
-        posts = Post.query.paginate(page=page, per_page=per_page, error_out=False)
-        return jsonify([{'id': p.id, 'title': p.title, 'user_id': p.user_id} for p in posts.items])
+    def create_course(self, id: int, name: str):
+        if id in self.courses:
+            return {"error": "Course already exists"}
+        course = Course(id, name)
+        self.courses[id] = course
+        return course.to_dict()
 
-    def post(self):
-        data = request.get_json()
-        new_post = Post(title=data['title'], user_id=data['user_id'])
-        db.session.add(new_post)
-        db.session.commit()
-        return jsonify({'message': 'Post created'})
+    def enroll_student(self, id: int, student_id: int, course_id: int):
+        if id in self.enrollments:
+            return {"error": "Enrollment already exists"}
+        if student_id not in self.students:
+            return {"error": "Student not found"}
+        if course_id not in self.courses:
+            return {"error": "Course not found"}
+        enrollment = Enrollment(id, student_id, course_id)
+        self.students[student_id].add_enrollment(enrollment)
+        self.courses[course_id].add_enrollment(enrollment)
+        self.enrollments[id] = enrollment
+        return enrollment.to_dict()
 
+api = InMemoryAPI()
+api.create_student(1, "Alice")
+api.create_course(1, "Mathematics")
+api.enroll_student(1, 1, 1)
 
-class CommentResource(Resource):
-    def get(self):
-        post_id = request.args.get('post_id', type=int)
-        if post_id:
-            comments = Comment.query.filter_by(post_id=post_id).all()
-        else:
-            comments = Comment.query.all()
-        return jsonify([{'id': c.id, 'text': c.text, 'post_id': c.post_id} for c in comments])
+@app.route('/students', methods=['GET'])
+def get_students():
+    return jsonify([student.to_dict() for student in api.students.values()])
 
-    def post(self):
-        data = request.get_json()
-        new_comment = Comment(text=data['text'], post_id=data['post_id'])
-        db.session.add(new_comment)
-        db.session.commit()
-        return jsonify({'message': 'Comment created'})
+@app.route('/courses', methods=['GET'])
+def get_courses():
+    return jsonify([course.to_dict() for course in api.courses.values()])
 
-
-# API Routes
-api.add_resource(UserResource, '/users')
-api.add_resource(PostResource, '/posts')
-api.add_resource(CommentResource, '/comments')
+@app.route('/enrollments', methods=['GET'])
+def get_enrollments():
+    return jsonify([enrollment.to_dict() for enrollment in api.enrollments.values()])
 
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
     app.run(debug=True)
